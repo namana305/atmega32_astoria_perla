@@ -33,30 +33,31 @@
 //-----D15-----D14-----D13-----D12-----D11-----D10-------D9-------D8--
 //------↓------↓--------↓-------↓-------↓-------↓---------↓-------↓---
 //------↓------↓--------↓-|HC138_A0|HC138_A1|HC138_A2|--|TXD|---|RXD|-
+#define HOTWATER_SOLENOID 4
+CFMCGroup group0(0, 0);
+CFMCGroup group1(1, 64);
+CFMCGroup group2(2, 128);
+CFMCGroup group3(3, 192);
 
-CFMCGroup group0(0);
-CFMCGroup group1(1);
-CFMCGroup group2(2);
-CFMCGroup group3(3);
-byte buff_gr0_key;
-byte buff_gr1_key;
-byte buff_gr2_key;
-byte buff_gr3_key;
-
+byte _relay_tea_register; // MÁY bình thường thì relay này là relay trà nhưng máy Duy lỏ thì là livelo (relay level boiler)
+bool BOILER_FILLING = false;
 byte _relay_register;
 byte buff_relay_register = _relay_register;
 byte _wtfl_register;
 byte buff_wtfl_register = _wtfl_register;
+byte _config_register;
+byte buff_config_register = _config_register;
+byte buff_wt_level;
+byte wtfl_level;
 
-int buff_wt_level;
-int wtfl_level;
 bool _isSetupMode = false;
 void scan1_3__1234();
 void scan1_3__567();
 void scan2_4__1234();
 void scan2_4__567();
 
-unsigned long start;
+unsigned long blinkPipestart;
+unsigned long watchWaterStart;
 unsigned long millisSync;
 unsigned long microSync;
 unsigned long scanTimeStamp;
@@ -110,6 +111,15 @@ void setup()
   group2.water_flow_Register = &_wtfl_register;
   group3.water_flow_Register = &_wtfl_register;
 
+  group0.water_flow_bit_order = 7;
+  group1.water_flow_bit_order = 6;
+  group2.water_flow_bit_order = 5;
+
+  pinMode(A0, INPUT);
+  group0.loadData();
+  group1.loadData();
+  group2.loadData();
+  group3.loadData();
   MsTimer2::set(1, scanLed);
   MsTimer2::start();
 }
@@ -258,12 +268,15 @@ void mainLoop()
   cli();
   //   send relay
   DDRB = 0B11111111;
-  PORTB = _relay_register;
 
+  PORTB = _relay_register;
   PORTD &= ~0B00001100;
   PORTD |= 0B00011100;
+
+  PORTB = _relay_tea_register;
   PORTD &= ~0B00010100;
   PORTD |= 0B00011100;
+
   // read wtfl
   DDRB = 0B00000000;
   PORTB = 0B00000000;
@@ -279,61 +292,65 @@ void mainLoop()
   ((PINB & (1 << PINB1)) == (1 << PINB1)) ? (_wtfl_register) |= (1 << (1)) : (_wtfl_register) &= ~(1 << (1));
   ((PINB & (1 << PINB0)) == (1 << PINB0)) ? (_wtfl_register) |= (1 << (0)) : (_wtfl_register) &= ~(1 << (0));
   PORTD |= 0B00011100;
+  _NOP();
+  PORTD &= ~0B00010000;
+  _NOP();
+  ((PINB & (1 << PINB7)) == (1 << PINB7)) ? (_config_register) |= (1 << (7)) : (_config_register) &= ~(1 << (7));
+  ((PINB & (1 << PINB6)) == (1 << PINB6)) ? (_config_register) |= (1 << (6)) : (_config_register) &= ~(1 << (6));
+  ((PINB & (1 << PINB5)) == (1 << PINB5)) ? (_config_register) |= (1 << (5)) : (_config_register) &= ~(1 << (5));
+  ((PINB & (1 << PINB4)) == (1 << PINB4)) ? (_config_register) |= (1 << (4)) : (_config_register) &= ~(1 << (4));
+  ((PINB & (1 << PINB3)) == (1 << PINB3)) ? (_config_register) |= (1 << (3)) : (_config_register) &= ~(1 << (3));
+  ((PINB & (1 << PINB2)) == (1 << PINB2)) ? (_config_register) |= (1 << (2)) : (_config_register) &= ~(1 << (2));
+  ((PINB & (1 << PINB1)) == (1 << PINB1)) ? (_config_register) |= (1 << (1)) : (_config_register) &= ~(1 << (1));
+  ((PINB & (1 << PINB0)) == (1 << PINB0)) ? (_config_register) |= (1 << (0)) : (_config_register) &= ~(1 << (0));
+  PORTD |= 0B00011100;
 
   group0.scan(millisSync);
   group1.scan(millisSync);
   group2.scan(millisSync);
   group3.scan(millisSync);
-  if (buff_gr0_key != group0.key_bit_Register)
+  if (!((_wtfl_register >> 3) & 0x01))
   {
-    Serial.print("GR1:");
-    Serial.println(group0.key_bit_Register, BIN);
-    buff_gr0_key = group0.key_bit_Register;
+    _relay_register |= (1 << 3);
   }
-  if (buff_gr1_key != group1.key_bit_Register)
+  else
   {
-    Serial.print("GR2:");
-    Serial.println(group1.key_bit_Register, BIN);
-    buff_gr1_key = group1.key_bit_Register;
+    _relay_register &= ~(1 << 3);
   }
-  if (buff_gr2_key != group2.key_bit_Register)
+  // if (_config_register != buff_config_register)
+  // {
+  //   Serial.print("CONFIG:");
+  //   Serial.println(_config_register, BIN);
+  //   buff_config_register = _config_register;
+  // }
+  // watch water
+  if (millisSync - watchWaterStart > 3000)
   {
-    Serial.print("GR3:");
-    Serial.println(group2.key_bit_Register, BIN);
-    buff_gr2_key = group2.key_bit_Register;
-  }
-  if (buff_gr3_key != group3.key_bit_Register)
-  {
-    Serial.print("GR4:");
-    Serial.println(group3.key_bit_Register, BIN);
-    buff_gr3_key = group3.key_bit_Register;
-  }
-  if (buff_wtfl_register != _wtfl_register)
-  {
-    Serial.print("WTFL:");
-    Serial.println(_wtfl_register, BIN);
-    buff_wtfl_register = _wtfl_register;
-  }
-  if (buff_relay_register != _relay_register)
-  {
-    Serial.print("RELAY:");
-    Serial.println(_relay_register, BIN);
-    buff_relay_register = _relay_register;
-  }
-  if (millisSync - start > 500)
-  {
+    // Serial.print("A0:");
+    // Serial.println(wtfl_level);
     wtfl_level = analogRead(A0);
-    if (wtfl_level != buff_wt_level)
+    if (wtfl_level > 99)
     {
-      Serial.print("ADC0:");
-      Serial.println(wtfl_level);
-      buff_wt_level = wtfl_level;
+      _relay_tea_register = 0B00010000;
+      BOILER_FILLING = true;
     }
-    _blinkPipe = !_blinkPipe;
-    start = millisSync;
+    else
+    {
+      _relay_tea_register = 0;
+      BOILER_FILLING = false;
+    }
+    watchWaterStart = millisSync;
   }
+  // blink pipe
+  if (millisSync - blinkPipestart > 500)
+  {
+    _blinkPipe = !_blinkPipe;
+    blinkPipestart = millisSync;
+  }
+  // key scan
+  // scanLed();
 
-  if ((group0.state == EXTRACTING || group0.state == CLEANING_RUN) || (group1.state == EXTRACTING || group1.state == CLEANING_RUN) || (group2.state == EXTRACTING || group2.state == CLEANING_RUN) || (group3.state == EXTRACTING || group3.state == CLEANING_RUN))
+  if ((group0.state == EXTRACTING || group0.state == CLEANING_RUN) || (group1.state == EXTRACTING || group1.state == CLEANING_RUN) || (group2.state == EXTRACTING || group2.state == CLEANING_RUN) || (group3.state == EXTRACTING || group3.state == CLEANING_RUN) || BOILER_FILLING)
   {
     _relay_register |= (1 << 0);
   }
